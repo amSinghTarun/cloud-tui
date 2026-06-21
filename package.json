@@ -18,8 +18,8 @@
 		"dist"
 	],
 	"dependencies": {
-
 		"better-sqlite3": "^12.11.1",
+		"dotenv": "^17.4.2",
 		"ink": "^4.1.0",
 		"meow": "^11.0.0",
 		"react": "^18.2.0"

@@ -6,10 +6,11 @@ import {
 } from '@google/genai';
 import {fileTools} from '../tools/index.js';
 import {getDefaultModel} from '../db/index.js';
+import 'dotenv/config';
 
 export const geminiClient = new GoogleGenAI({
 	vertexai: true,
-	project: 'project-b955da7b-8f9e-4324-af2',
+	project: process.env['PROJECT_ID']!,
 });
 
 // for those using api-key
