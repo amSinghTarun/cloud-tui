@@ -4,6 +4,8 @@ Cloud TUI is a local-first terminal coding agent. It keeps project-scoped
 sessions, coordinates isolated Git worktrees, asks before approval-gated
 operations, and can turn implementation work into a visible task plan.
 
+Product website: [tui-website.vercel.app](https://tui-website.vercel.app/)
+
 ## Install
 
 Cloud TUI runs on Node.js 22.13 or newer. It can be installed from the npm
