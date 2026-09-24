@@ -28,6 +28,8 @@ const IGNORED_DIRECTORY_ENTRIES = new Set([
 	'.yarn',
 	'node_modules',
 ]);
+const PATH_NOT_FOUND_GUIDANCE =
+	'Path not found. Do not conclude that the requested item is absent. Use executeBash to locate it first: use rg --files (excluding node_modules and .git) for a file, or a bounded find command for a directory. Then retry this tool with the workspace-relative path returned by the command.';
 
 export let fileTools = {
 	readDirectory: {
@@ -68,6 +70,12 @@ export let fileTools = {
 					context.cwd,
 					args.directoryPath,
 				);
+				if (!existsSync(directoryPath)) {
+					return {
+						status: 'error',
+						response: `${PATH_NOT_FOUND_GUIDANCE} Requested directory: ${args.directoryPath}`,
+					};
+				}
 
 				const directories = [directoryPath];
 				const entries: Array<{path: string; type: 'directory' | 'file'}> = [];
@@ -161,7 +169,7 @@ export let fileTools = {
 				if (!existsSync(readFilePath)) {
 					return {
 						status: 'error',
-						response: 'No file present at ' + args.filePath,
+						response: `${PATH_NOT_FOUND_GUIDANCE} Requested file: ${args.filePath}`,
 					};
 				}
 				const fileContent = readFileSync(readFilePath, {encoding: 'utf-8'});
