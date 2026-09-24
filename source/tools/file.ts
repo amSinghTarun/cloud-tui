@@ -5,19 +5,34 @@ import {
 	writeFileSync,
 	unlinkSync,
 	existsSync,
+	mkdirSync,
 } from 'fs';
+import {dirname} from 'node:path';
+import {
+	activityTarget,
+	CONTEXT_ARTIFACT_PREFIX,
+	resolveWorkspacePath,
+	seekInput,
+} from '../helpers';
+import {AgentTool, ToolContext, ToolResult} from '../types';
+import {randomUUID} from 'crypto';
 
-function errMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
+const MAX_DIRECTORY_ENTRIES = 200;
+const MAX_FILE_CONTENT_CHARACTERS = 80_000;
+const IGNORED_DIRECTORY_ENTRIES = new Set(['.git', 'node_modules']);
 
-export let fileTools = [
-	{
-		id: '1',
-		name: 'readDirectory',
+export let fileTools = {
+	readDirectory: {
+		activity: {
+			started: (args: {directoryPath: string}) =>
+				`Inspecting project files ${activityTarget(args.directoryPath)}`,
+			completed: (args: {directoryPath: string}) =>
+				`Inspected project files ${activityTarget(args.directoryPath)}`,
+		},
 		declaration: {
 			name: 'readDirectory',
-			description: 'List the files and folders in a directory.',
+			description:
+				'List the immediate files and folders in a directory. This does not recurse into child folders and omits .git and node_modules. Call it again for a specific child directory.',
 			parametersJsonSchema: {
 				type: 'object',
 				properties: {
@@ -30,25 +45,64 @@ export let fileTools = [
 				required: ['directoryPath'],
 			},
 		} as FunctionDeclaration,
-		executable: (args: {directoryPath: string}) => {
+		executable: (
+			args: {directoryPath: string},
+			context: ToolContext,
+		): ToolResult => {
 			try {
-				const entries = readdirSync(args.directoryPath, {
-					recursive: true,
-				});
-				return `Recursive list of Contents of ${args.directoryPath} : \n ${
-					entries || '(empty)'
-				}`;
+				if (!args.directoryPath) {
+					return {
+						status: 'error',
+						response: 'No directory path provided',
+					};
+				}
+				const directoryPath = resolveWorkspacePath(
+					context.cwd,
+					args.directoryPath,
+				);
+
+				const entries = readdirSync(directoryPath, {
+					encoding: 'utf-8',
+					withFileTypes: true,
+				})
+					.filter(entry => !IGNORED_DIRECTORY_ENTRIES.has(entry.name))
+					.sort((left, right) => left.name.localeCompare(right.name));
+				const visibleEntries = entries.slice(0, MAX_DIRECTORY_ENTRIES);
+
+				return {
+					status: 'success',
+					response: {
+						entries: visibleEntries.map(entry => ({
+							name: entry.name,
+							type: entry.isDirectory() ? 'directory' : 'file',
+						})),
+						...(entries.length > visibleEntries.length
+							? {
+								truncated: true,
+								omittedEntries: entries.length - visibleEntries.length,
+							}
+							: {}),
+					},
+				};
 			} catch (error) {
-				return `Error reading directory: ${errMessage(error)}`;
+				return {
+					status: 'error',
+					response: `${error}`,
+				};
 			}
 		},
 	},
-	{
-		id: '2',
-		name: 'readFileContent',
+	readFileContent: {
+		activity: {
+			started: (args: {filePath: string}) =>
+				`Reading project file: ${activityTarget(args.filePath)}`,
+			completed: (args: {filePath: string}) =>
+				`Inspected project file: ${activityTarget(args.filePath)}`,
+		},
 		declaration: {
 			name: 'readFileContent',
-			description: 'Read and return the full text content of a file.',
+			description:
+				'Read a text file. Very large files are truncated to keep the conversation usable; prefer focused source and configuration files.',
 			parametersJsonSchema: {
 				type: 'object',
 				properties: {
@@ -60,18 +114,47 @@ export let fileTools = [
 				required: ['filePath'],
 			},
 		} as FunctionDeclaration,
-		executable: (args: {filePath: string}) => {
+		executable: (
+			args: {filePath: string},
+			context: ToolContext,
+		): ToolResult => {
 			try {
-				const content = readFileSync(args.filePath, 'utf-8');
-				return `Content of ${args.filePath} : \n ${content}`;
+				if (!args.filePath) {
+					return {
+						status: 'error',
+						response: 'File path not provided ' + args.filePath,
+					};
+				}
+				const readFilePath = resolveWorkspacePath(context.cwd, args.filePath);
+				if (!existsSync(readFilePath)) {
+					return {
+						status: 'error',
+						response: 'No file present at ' + args.filePath,
+					};
+				}
+				const fileContent = readFileSync(readFilePath, {encoding: 'utf-8'});
+				return {
+					status: 'success',
+					response:
+						fileContent.length > MAX_FILE_CONTENT_CHARACTERS
+							? `${fileContent.slice(0, MAX_FILE_CONTENT_CHARACTERS)}\n\n[File output truncated after ${MAX_FILE_CONTENT_CHARACTERS} characters.]`
+							: fileContent,
+				};
 			} catch (error) {
-				return `Error reading file: ${errMessage(error)}`;
+				return {
+					status: 'error',
+					response: error,
+				};
 			}
 		},
 	},
-	{
-		id: '3',
-		name: 'createFile',
+	createFile: {
+		activity: {
+			started: (args: {fileCreatePath: string}) =>
+				`Creating the file at ${args.fileCreatePath}`,
+			completed: (args: {fileCreatePath: string}) =>
+				`Created the file at ${args.fileCreatePath}`,
+		},
 		declaration: {
 			name: 'createFile',
 			description:
@@ -87,19 +170,42 @@ export let fileTools = [
 				required: ['fileCreatePath'],
 			},
 		} as FunctionDeclaration,
-		executable: (args: {fileCreatePath: string}) => {
+		executable: (
+			args: {fileCreatePath: string},
+			context: ToolContext,
+		): ToolResult => {
 			try {
-				// "wx" => create for writing, but fail if the path already exists.
-				writeFileSync(args.fileCreatePath, '', {flag: 'wx'});
-				return `Created empty file at ${args.fileCreatePath}`;
+				if (!args.fileCreatePath) {
+					return {
+						status: 'error',
+						response: 'fileCreatePath is empty',
+					};
+				}
+				const createPath = resolveWorkspacePath(
+					context.cwd,
+					args.fileCreatePath,
+				);
+				mkdirSync(dirname(createPath), {recursive: true});
+				writeFileSync(createPath, '', {flag: 'wx'});
+				return {
+					status: 'success',
+					response: `Created file: ${args.fileCreatePath}`,
+				};
 			} catch (error) {
-				return `Error creating file: ${errMessage(error)}`;
+				return {
+					response: error,
+					status: 'error',
+				};
 			}
 		},
 	},
-	{
-		id: '4',
-		name: 'deleteFile',
+	deleteFile: {
+		activity: {
+			started: (args: {fileDeletePath: string}) =>
+				`deleting file : ${args.fileDeletePath}`,
+			completed: (args: {fileDeletePath: string}) =>
+				`deleted file : ${args.fileDeletePath}`,
+		},
 		declaration: {
 			name: 'deleteFile',
 			description: 'Delete the file at the specified path.',
@@ -115,18 +221,53 @@ export let fileTools = [
 				required: ['fileDeletePath'],
 			},
 		} as FunctionDeclaration,
-		executable: (args: {fileDeletePath: string}) => {
+		executable: async (
+			args: {fileDeletePath: string},
+			context: ToolContext,
+		): Promise<ToolResult> => {
 			try {
-				unlinkSync(args.fileDeletePath);
-				return `Deleted ${args.fileDeletePath}`;
+				if (!args.fileDeletePath) {
+					return {
+						status: 'error',
+						response: 'No path provided to delete',
+					};
+				}
+				const deletePath = resolveWorkspacePath(
+					context.cwd,
+					args.fileDeletePath,
+				);
+				const uuid = randomUUID();
+				const approval = seekInput<boolean>(uuid, context.signal);
+				context.sendToUser({
+					type: 'approval',
+					response: deletePath,
+					uuid: uuid,
+				});
+				const isApproved = await approval;
+				if (!isApproved)
+					return {
+						status: 'error',
+						response: 'File deletion rejected by the user',
+					};
+				unlinkSync(deletePath);
+				return {
+					status: 'success',
+					response: 'File deleted: ' + deletePath,
+				};
 			} catch (error) {
-				return `Error deleting file: ${errMessage(error)}`;
+				return {
+					status: 'error',
+					response: error,
+				};
 			}
 		},
 	},
-	{
-		id: '5',
-		name: 'updateFile',
+	updateFile: {
+		activity: {
+			started: (args: {filePath: string}) => `Updating file : ${args.filePath}`,
+			completed: (args: {filePath: string}) =>
+				`Updated file : ${args.filePath}`,
+		},
 		declaration: {
 			name: 'updateFile',
 			description:
@@ -157,41 +298,83 @@ export let fileTools = [
 				required: ['filePath'],
 			},
 		} as FunctionDeclaration,
-		executable: (args: {
-			filePath: string;
-			content?: string;
-			oldString?: string;
-			newString?: string;
-		}) => {
+		executable: (
+			args: {
+				filePath: string;
+				content?: string;
+				oldString?: string;
+				newString?: string;
+			},
+			context: ToolContext,
+		): ToolResult => {
 			try {
+				if (!args.filePath)
+					return {
+						response: 'No filepath provided',
+						status: 'error',
+					};
+				const updatePath = resolveWorkspacePath(context.cwd, args.filePath);
+				if (!existsSync(updatePath))
+					return {
+						status: 'error',
+						response: `Error: cannot edit ${args.filePath} because it does not exist.`,
+					};
+
+				if (
+					typeof args.content === 'string' &&
+					args.content.includes(CONTEXT_ARTIFACT_PREFIX)
+				)
+					return {
+						status: 'error',
+						response:
+							'Error: refused to write a context-artifact reference into application source. Use readContextArtifact for historical content or readFileContent for the current file, then provide real source code.',
+					};
+
 				if (typeof args.content === 'string') {
-					writeFileSync(args.filePath, args.content, 'utf-8');
-					return `Wrote ${args.content.length} characters to ${args.filePath}`;
+					writeFileSync(updatePath, args.content, 'utf-8');
+					return {
+						status: 'success',
+						response: `Wrote file: ${args.filePath}`,
+					};
 				}
 
-				if (typeof args.oldString === 'string') {
-					if (!existsSync(args.filePath)) {
-						return `Error: cannot edit ${args.filePath} because it does not exist.`;
-					}
-					const current = readFileSync(args.filePath, 'utf-8');
-					const occurrences = current.split(args.oldString).length - 1;
-					if (occurrences === 0) {
-						return `Error: oldString was not found in ${args.filePath}. No changes made.`;
-					}
-					if (occurrences > 1) {
-						return `Error: oldString matched ${occurrences} times in ${args.filePath}; it must be unique. No changes made.`;
-					}
+				if (typeof args.oldString == 'string') {
+					const current = readFileSync(updatePath, 'utf-8');
+					const oldStringIsUnique = current.split(args.oldString).length - 1;
+
+					if (oldStringIsUnique == 0)
+						return {
+							status: 'error',
+							response: `Error: oldString was not found in ${args.filePath}. No changes made.`,
+						};
+
+					if (oldStringIsUnique > 1)
+						return {
+							status: 'error',
+							response: `Error: oldString matched ${oldStringIsUnique} times in ${args.filePath}; it must be unique. No changes made.`,
+						};
 
 					const replacement = args.newString ?? '';
 					const updated = current.replace(args.oldString, () => replacement);
-					writeFileSync(args.filePath, updated, 'utf-8');
-					return `Replaced 1 occurrence in ${args.filePath}`;
+
+					writeFileSync(updatePath, updated, 'utf-8');
+
+					return {
+						response: `Replaced 1 occurrence in ${args.filePath}`,
+						status: 'success',
+					};
 				}
 
-				return `Error: provide either "content" (to overwrite) or "oldString"/"newString" (to replace).`;
+				return {
+					response: 'Provide content or oldString to update a file.',
+					status: 'error',
+				};
 			} catch (error) {
-				return `Error updating file: ${errMessage(error)}`;
+				return {
+					status: 'error',
+					response: error,
+				};
 			}
 		},
 	},
-];
+} satisfies Record<string, AgentTool<any>>;

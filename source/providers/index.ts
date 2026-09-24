@@ -1,1 +1,2 @@
-export * from './gemini.js';
+export * from './gemini';
+export * from './geminiConfig';

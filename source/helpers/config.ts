@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
-import {PROVIDERS_MODELS} from '../app.js';
-import {getDefaultModel} from '../db/index.js';
-import {getConfigPath} from './path.js';
+import {PROVIDERS_MODELS} from '../config/models';
+import {getDefaultModel} from '../db';
+import {getConfigPath} from './path';
 
 export const verifyProviderAndLogin = () => {
 	try {

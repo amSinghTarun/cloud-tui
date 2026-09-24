@@ -1,3 +1,4 @@
-export * from './auth.js';
-export * from './model.js';
-export * from './agent.js';
+export * from './auth';
+export * from './model';
+export * from './agent';
+export * from './project';

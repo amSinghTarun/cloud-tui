@@ -1,7 +1,12 @@
 {
 	"extends": "@sindresorhus/tsconfig",
 	"compilerOptions": {
-		"outDir": "dist"
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"noEmit": true,
+		"rootDir": ".",
+		"target": "ESNext",
+		"types": ["bun", "node"]
 	},
-	"include": ["source"]
+	"include": ["frontend", "source", "test"]
 }

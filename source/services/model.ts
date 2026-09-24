@@ -1,4 +1,4 @@
-import {setDefaultModel} from '../db/index.js';
+import {setDefaultModel} from '../db';
 
 export const setDefault = (model: string) => {
 	setDefaultModel(model);
