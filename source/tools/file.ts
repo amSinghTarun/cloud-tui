@@ -7,7 +7,7 @@ import {
 	existsSync,
 	mkdirSync,
 } from 'fs';
-import {dirname} from 'node:path';
+import {dirname, join, relative, sep} from 'node:path';
 import {
 	activityTarget,
 	CONTEXT_ARTIFACT_PREFIX,
@@ -17,9 +17,17 @@ import {
 import {AgentTool, ToolContext, ToolResult} from '../types';
 import {randomUUID} from 'crypto';
 
-const MAX_DIRECTORY_ENTRIES = 200;
+const MAX_DIRECTORY_ENTRIES = 500;
+const MAX_DIRECTORIES_TO_INSPECT = 10_000;
 const MAX_FILE_CONTENT_CHARACTERS = 80_000;
-const IGNORED_DIRECTORY_ENTRIES = new Set(['.git', 'node_modules']);
+const IGNORED_DIRECTORY_ENTRIES = new Set([
+	'.git',
+	'.next',
+	'.pnpm-store',
+	'.turbo',
+	'.yarn',
+	'node_modules',
+]);
 
 export let fileTools = {
 	readDirectory: {
@@ -32,7 +40,7 @@ export let fileTools = {
 		declaration: {
 			name: 'readDirectory',
 			description:
-				'List the immediate files and folders in a directory. This does not recurse into child folders and omits .git and node_modules. Call it again for a specific child directory.',
+				'Recursively list the files and folders under a project directory. Dependency, VCS, and build-cache folders (.git, node_modules, .next, .yarn, .pnpm-store, and .turbo) are skipped. Use executeBash with rg --files or find when you need to locate an exact filename.',
 			parametersJsonSchema: {
 				type: 'object',
 				properties: {
@@ -61,25 +69,49 @@ export let fileTools = {
 					args.directoryPath,
 				);
 
-				const entries = readdirSync(directoryPath, {
-					encoding: 'utf-8',
-					withFileTypes: true,
-				})
-					.filter(entry => !IGNORED_DIRECTORY_ENTRIES.has(entry.name))
-					.sort((left, right) => left.name.localeCompare(right.name));
-				const visibleEntries = entries.slice(0, MAX_DIRECTORY_ENTRIES);
+				const directories = [directoryPath];
+				const entries: Array<{path: string; type: 'directory' | 'file'}> = [];
+				let inspectedDirectories = 0;
+
+				while (
+					directories.length > 0 &&
+					entries.length < MAX_DIRECTORY_ENTRIES &&
+					inspectedDirectories < MAX_DIRECTORIES_TO_INSPECT
+				) {
+					const currentDirectory = directories.shift()!;
+					inspectedDirectories++;
+					let currentEntries;
+					try {
+						currentEntries = readdirSync(currentDirectory, {
+							encoding: 'utf-8',
+							withFileTypes: true,
+						}).sort((left, right) => left.name.localeCompare(right.name));
+					} catch {
+						continue;
+					}
+
+					for (const entry of currentEntries) {
+						if (IGNORED_DIRECTORY_ENTRIES.has(entry.name)) continue;
+						const entryPath = join(currentDirectory, entry.name);
+						entries.push({
+							path: relative(directoryPath, entryPath).split(sep).join('/'),
+							type: entry.isDirectory() ? 'directory' : 'file',
+						});
+						if (entry.isDirectory()) directories.push(entryPath);
+						if (entries.length === MAX_DIRECTORY_ENTRIES) break;
+					}
+				}
 
 				return {
 					status: 'success',
 					response: {
-						entries: visibleEntries.map(entry => ({
-							name: entry.name,
-							type: entry.isDirectory() ? 'directory' : 'file',
-						})),
-						...(entries.length > visibleEntries.length
+						entries,
+						inspectedDirectories,
+						...(directories.length > 0
 							? {
 								truncated: true,
-								omittedEntries: entries.length - visibleEntries.length,
+								message:
+									'Directory listing reached its safety limit. Inspect a specific subdirectory for more detail.',
 							}
 							: {}),
 					},

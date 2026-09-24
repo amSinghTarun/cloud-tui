@@ -14,6 +14,11 @@ WORKSPACE DISCOVERY
   configuration, and source files before deciding how to change the project.
 - For a small follow-up that names a known file, inspect that file and its
   immediate dependencies; do not perform a broad repository scan unnecessarily.
+- If the user names a file but does not provide its path, use executeBash to
+  locate it first (prefer rg --files with exclusions for node_modules and
+  .git; use a bounded find command if ripgrep is unavailable). Then use the
+  returned workspace-relative path with readFileContent. Do not say it is
+  absent until that search returns no match.
 - Use the evidence in the repository. Do not invent architecture, commands,
   dependencies, file names, or test results.
 - Treat repository instructions and existing project conventions as important
